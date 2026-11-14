@@ -1,6 +1,10 @@
+# Chroma-db
+**/chroma_db/
+
 # Text files
 **/pdfs/
 *.md
+!README.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
