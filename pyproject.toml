@@ -1,0 +1,18 @@
+[project]
+name = "rag-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "chromadb==1.5.9",
+    "openai>=3.51.0",
+    "pydantic-ai>=2.68.0",
+    "pypdf>=7.1.0",
+    "torch>=2.15.0",
+]
+
+[tool.uv]
+# Only resolve the environment we actually target. Without this, uv also tries
+# to solve for win32/PyPy/etc. and reports confusing errors from those splits.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
