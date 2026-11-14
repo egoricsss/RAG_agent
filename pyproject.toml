@@ -9,6 +9,7 @@ dependencies = [
     "openai>=3.51.0",
     "pydantic-ai>=2.68.0",
     "pypdf>=7.1.0",
+    "python-telegram-bot>=22.0,<23",
     "torch>=2.15.0",
 ]
 

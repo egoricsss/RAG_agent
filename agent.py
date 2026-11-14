@@ -122,7 +122,9 @@ def create_agent(model: OpenRouterModel) -> Agent[Deps, Answer]:
 class ExamAgent:
     """Reusable async interface; create once and close when the application stops."""
 
-    def __init__(self, agent: Agent[Deps, Answer], deps: Deps, chat_client: AsyncOpenAI):
+    def __init__(
+        self, agent: Agent[Deps, Answer], deps: Deps, chat_client: AsyncOpenAI
+    ):
         self.agent = agent
         self.deps = deps
         self.chat_client = chat_client
