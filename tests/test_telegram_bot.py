@@ -1,6 +1,8 @@
 import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -8,13 +10,14 @@ from telegram_bot import BotConfig, PrivateBot, extract_questions, split_message
 
 
 def make_update(user_id=12, chat_type="private", text="Вопрос", photos=None,
-                group=None, message_id=1, caption=None):
+                group=None, message_id=1, caption=None, username=None):
+    user = SimpleNamespace(id=user_id, username=username) if user_id is not None else None
     message = SimpleNamespace(
         text=text, photo=photos or [], media_group_id=group,
-        message_id=message_id, caption=caption, reply_text=AsyncMock(),
+        message_id=message_id, caption=caption, reply_text=AsyncMock(), from_user=user,
     )
     return SimpleNamespace(
-        effective_user=SimpleNamespace(id=user_id) if user_id is not None else None,
+        effective_user=user,
         effective_chat=SimpleNamespace(id=123, type=chat_type),
         effective_message=message,
     )
@@ -23,22 +26,33 @@ def make_update(user_id=12, chat_type="private", text="Вопрос", photos=Non
 class ConfigTests(unittest.TestCase):
     def test_valid_config(self):
         with patch.dict("os.environ", {
-            "TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_ALLOWED_USER_IDS": " 12,34,12 "
+            "TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_ALLOWED_USER_IDS": " 12,34,12 ",
+            "TELEGRAM_SUPER_ADMIN_ID": "42",
         }, clear=True):
             config = BotConfig.from_env()
         self.assertEqual(config.allowed_ids, {12, 34})
         self.assertEqual(config.vision_model, "google/gemini-2.5-flash")
 
     def test_bad_config_fails_closed(self):
-        for ids in ("", "12,", "12,abc", "-12", "0", "１２"):
+        for ids in ("12,", "12,abc", "-12", "0", "１２", "999999999999999999999"):
             with self.subTest(ids=ids), patch.dict("os.environ", {
-                "TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_ALLOWED_USER_IDS": ids
+                "TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_ALLOWED_USER_IDS": ids,
+                "TELEGRAM_SUPER_ADMIN_ID": "42",
             }, clear=True):
                 with self.assertRaises(ValueError):
                     BotConfig.from_env()
         with patch.dict("os.environ", {"TELEGRAM_ALLOWED_USER_IDS": "12"}, clear=True):
             with self.assertRaises(ValueError):
                 BotConfig.from_env()
+        for admin in ("", "0", "-1", "abc", "１２", "999999999999999999999"):
+            with self.subTest(admin=admin), patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_SUPER_ADMIN_ID": admin,
+            }, clear=True), self.assertRaises(ValueError):
+                BotConfig.from_env()
+
+    def test_initial_ids_are_optional(self):
+        with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "token", "TELEGRAM_SUPER_ADMIN_ID": "42"}, clear=True):
+            self.assertEqual(BotConfig.from_env().allowed_ids, frozenset())
 
     def test_split_keeps_all_text(self):
         for text in ("a" * 9000, "line\n" * 2000, "short", "😀" * 5000):
@@ -49,7 +63,8 @@ class ConfigTests(unittest.TestCase):
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.bot = PrivateBot(BotConfig("token", frozenset({12}), "vision"))
+        self.bot = PrivateBot(BotConfig("token", frozenset({12}), "vision", 42, ":memory:"))
+        self.addCleanup(self.bot.access.close)
         self.bot.service = SimpleNamespace(answer=AsyncMock(return_value="Ответ"), close=AsyncMock())
         self.context = SimpleNamespace(bot=SimpleNamespace(get_file=AsyncMock()))
 
@@ -135,6 +150,118 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         service.close.assert_awaited_once()
         self.assertFalse(self.bot.albums)
         self.context.bot.get_file.assert_not_awaited()
+
+    async def test_admin_invites_and_username_binds_to_id(self):
+        admin = make_update(user_id=42)
+        ctx = SimpleNamespace(args=["@Example_User"])
+        await self.bot.add_user(admin, ctx)
+        self.assertEqual(self.bot.access.list_users()[1], ["example_user"])
+        invited = make_update(user_id=99, username="eXample_User")
+        await self.bot.start(invited, self.context)
+        invited.effective_message.reply_text.assert_awaited_once()
+        self.assertTrue(self.bot.access.contains(99))
+        self.assertEqual(self.bot.access.list_users()[1], [])
+        other = make_update(user_id=100, username="example_user")
+        await self.bot.start(other, self.context)
+        other.effective_message.reply_text.assert_not_awaited()
+        # The grant is bound to the numeric ID, even when username changes.
+        await self.bot.start(make_update(user_id=99, username="another_name"), self.context)
+        self.assertTrue(self.bot.access.contains(99))
+
+    async def test_admin_commands_are_private_and_admin_only(self):
+        ctx = SimpleNamespace(args=["@new_user"])
+        for update in (make_update(user_id=12), make_update(user_id=42, chat_type="group"), make_update(user_id=None)):
+            for handler in (self.bot.add_user, self.bot.remove_user, self.bot.remove_all, self.bot.users):
+                await handler(update, ctx)
+            update.effective_message.reply_text.assert_not_awaited()
+        self.assertEqual(self.bot.access.list_users(), ([(12, None)], []))
+
+    async def test_remove_user_and_all_cancel_albums_and_invitations(self):
+        admin = make_update(user_id=42)
+        user = make_update(username="original_user", photos=[SimpleNamespace(file_id="1")], group="album")
+        await self.bot.photo(user, self.context)
+        self.assertTrue(self.bot.albums)
+        await self.bot.add_user(admin, SimpleNamespace(args=["@new_user"]))
+        await self.bot.remove_user(admin, SimpleNamespace(args=["@ORIGINAL_USER"]))
+        self.assertFalse(self.bot.access.contains(12))
+        self.assertFalse(self.bot.albums)
+        await self.bot.remove_all(admin, SimpleNamespace(args=[]))
+        self.assertEqual(self.bot.access.list_users(), ([], []))
+        await self.bot.start(admin, self.context)
+        self.assertTrue(self.bot.authorized(admin))
+        self.assertFalse(self.bot.authorized(user))
+
+    async def test_remove_pending_invitation_and_prevent_activation(self):
+        admin = make_update(user_id=42)
+        await self.bot.add_user(admin, SimpleNamespace(args=["@new_user"]))
+        await self.bot.remove_user(admin, SimpleNamespace(args=["@NEW_USER"]))
+        self.assertFalse(self.bot.authorized(make_update(user_id=99, username="new_user")))
+        self.assertEqual(self.bot.access.list_users()[1], [])
+
+    async def test_revocation_during_ocr_suppresses_reply(self):
+        started, finish = asyncio.Event(), asyncio.Event()
+
+        async def ocr(*_):
+            started.set()
+            await finish.wait()
+            return ["Question"]
+
+        self.context.bot.get_file.return_value = SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=b"x")
+        )
+        user = make_update(photos=[SimpleNamespace(file_id="1", file_size=1)])
+        with patch("telegram_bot.extract_questions", new=ocr):
+            task = asyncio.create_task(self.bot.photo(user, self.context))
+            await started.wait()
+            await self.bot.remove_all(make_update(user_id=42), SimpleNamespace(args=[]))
+            finish.set()
+            await task
+        user.effective_message.reply_text.assert_not_awaited()
+        self.bot.service.answer.assert_not_awaited()
+
+    async def test_invalid_commands_and_admin_cannot_be_removed(self):
+        admin = make_update(user_id=42)
+        for value in ("x", "@bad-name", "@Kelvin_name"):
+            await self.bot.add_user(admin, SimpleNamespace(args=[value]))
+            await self.bot.remove_user(admin, SimpleNamespace(args=[value]))
+        await self.bot.remove_user(admin, SimpleNamespace(args=["999999999999999999999"]))
+        await self.bot.remove_user(admin, SimpleNamespace(args=["42"]))
+        self.assertIn("Нельзя", admin.effective_message.reply_text.await_args.args[0])
+        self.assertEqual(self.bot.access.list_users(), ([(12, None)], []))
+
+    async def test_revocation_while_answer_is_running_suppresses_reply(self):
+        started, finish = asyncio.Event(), asyncio.Event()
+
+        async def answer(_):
+            started.set()
+            await finish.wait()
+            return "Ответ"
+
+        self.bot.service.answer.side_effect = answer
+        user = make_update()
+        task = asyncio.create_task(self.bot.text(user, self.context))
+        await started.wait()
+        await self.bot.remove_user(make_update(user_id=42), SimpleNamespace(args=["12"]))
+        finish.set()
+        await task
+        user.effective_message.reply_text.assert_not_awaited()
+
+    async def test_state_persists_and_env_ids_not_readded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "access.sqlite3")
+            config = BotConfig("token", frozenset({12}), "vision", 42, path)
+            first = PrivateBot(config)
+            admin = make_update(user_id=42)
+            await first.add_user(admin, SimpleNamespace(args=["@new_user"]))
+            await first.remove_user(admin, SimpleNamespace(args=["12"]))
+            first.access.close()
+            second = PrivateBot(config)
+            try:
+                self.assertFalse(second.access.contains(12))
+                self.assertEqual(second.access.list_users()[1], ["new_user"])
+                self.assertTrue(second.authorized(make_update(user_id=99, username="NEW_USER")))
+            finally:
+                second.access.close()
 
     async def test_vision_request_contains_all_images_and_parses_result(self):
         create = AsyncMock(return_value=SimpleNamespace(choices=[SimpleNamespace(

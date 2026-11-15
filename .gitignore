@@ -1,10 +1,15 @@
 # Chroma-db
 **/chroma_db/
 
+# Telegram access state
+telegram_access.sqlite3*
+
 # Text files
 **/pdfs/
 *.md
 !README.md
+!AGENTS.md
+!docs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
