@@ -1,0 +1,19 @@
+# Контекст сборки: только то, что попадает в образ.
+.git
+.github
+.idea
+.venv
+venv
+__pycache__
+**/__pycache__
+.ruff_cache
+.coverage
+htmlcov
+tests
+pdfs
+data
+*.sqlite3
+*.sqlite3-journal
+.env
+.env.*
+!.env.example

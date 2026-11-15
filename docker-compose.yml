@@ -1,0 +1,61 @@
+# Продакшен-запуск на сервере: docker compose up -d --build
+# Переменные окружения — в .env (шаблон: .env.example), см. docs/deploy.md.
+
+name: rag-agent
+
+services:
+  bot:
+    build:
+      context: .
+    image: rag-agent:local
+    container_name: rag-agent-bot
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      # Путь к ChromaDB задаёт образ; база вшита при сборке.
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-compilers_kb}
+      TELEGRAM_ACCESS_DB_PATH: /app/data/telegram_access.sqlite3
+    volumes:
+      # Доступы и приглашения должны переживать пересоздание контейнера.
+      - bot-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # Long polling не слушает порт: проверяем, что процесс бота жив.
+      test: ["CMD-SHELL", "grep -q telegram_bot.py /proc/[0-9]*/cmdline"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    stop_grace_period: 30s
+
+  # Разовый CLI-запрос: docker compose run --rm cli "Что такое транслирующая грамматика?"
+  cli:
+    profiles: ["cli"]
+    build:
+      context: .
+    image: rag-agent:local
+    env_file:
+      - .env
+    environment:
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-compilers_kb}
+      TELEGRAM_ACCESS_DB_PATH: /app/data/telegram_access.sqlite3
+    entrypoint: ["python", "main.py"]
+    volumes:
+      - bot-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  bot-data:

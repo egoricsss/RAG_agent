@@ -103,6 +103,24 @@ uv run telegram_bot.py
 `google/gemini-2.5-flash`); она должна поддерживать входные изображения и
 JSON Schema structured outputs через OpenRouter.
 
+## Docker на сервере
+
+В репозитории есть `Dockerfile`, `docker-compose.yml` и шаблон `.env.example`.
+База `chroma_db` не хранится в git, поэтому её нужно скопировать на сервер
+рядом с `docker-compose.yml`: при сборке она вшивается в образ.
+
+```bash
+cp .env.example .env && chmod 600 .env
+$EDITOR .env   # OPENROUTER_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_SUPER_ADMIN_ID
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+Разовый вопрос из CLI: `docker compose run --rm cli "вопрос"`. База доступа
+Telegram лежит в volume `bot-data` и переживает пересоздание контейнера;
+порты наружу не публикуются. Обновление, резервные копии и диагностика —
+в [docs/deploy.md](docs/deploy.md).
+
 ## Использование из приложения
 
 Интерфейс асинхронный. Создавайте экземпляр при запуске приложения и закрывайте при
