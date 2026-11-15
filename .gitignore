@@ -10,6 +10,7 @@ telegram_access.sqlite3*
 !README.md
 !AGENTS.md
 !docs/
+!docs/*.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

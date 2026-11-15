@@ -20,7 +20,7 @@ from pathlib import Path
 
 # ====================== НАСТРОЙКИ ======================
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent  # данные лежат в корне репозитория
 
 DEFAULT_QA_FILE = HERE / "Ответы_Транслирующие_системы.md"
 DEFAULT_PDF_DIR = HERE / "pdfs"
