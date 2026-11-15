@@ -9,7 +9,7 @@ ChromaDB и закрытый Telegram-бот.
 |---|---|
 | [docs/agent.md](docs/agent.md) | правки `agent.py`, `main.py`: поиск, промпт, модели, уверенность |
 | [docs/telegram-bot.md](docs/telegram-bot.md) | правки `telegram_bot.py`, `access_store.py`: доступ, хендлеры, фото |
-| [docs/knowledge-base.md](docs/knowledge-base.md) | ChromaDB, чанкинг, `pdf_embeding_converter.py` |
+| [docs/knowledge-base.md](docs/knowledge-base.md) | ChromaDB, чанкинг, `utils/pdf_embeding_converter.py` |
 | [README.md](README.md) | пользовательский запуск и поведение для людей |
 
 Начинай с этого файла, подробности бери в нужном документе. Не дублируй сюда
