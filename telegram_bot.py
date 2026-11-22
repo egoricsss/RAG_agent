@@ -323,7 +323,7 @@ class PrivateBot:
         if not self.still_authorized(message):
             return
         assert self.service is not None
-        answer = await self.service.answer(question, compact=True)
+        answer = await self.service.answer(question)
         for part, entities in format_answer(answer):
             if not self.still_authorized(message):
                 return
@@ -405,15 +405,9 @@ class PrivateBot:
                 )
                 return
             caption = "\n".join(item.caption for item in messages if item.caption)
-            for index, question in enumerate(questions, 1):
+            for question in questions:
                 if not self.still_authorized(message):
                     return
-                # Show the transcription so the user can catch OCR mistakes.
-                heading = f"Задание {index}:\n{question}"
-                for part in split_message(heading):
-                    if not self.still_authorized(message):
-                        return
-                    await message.reply_text(part)
                 prompt = (
                     f"{question}\n\nКомментарий пользователя: {caption}"
                     if caption

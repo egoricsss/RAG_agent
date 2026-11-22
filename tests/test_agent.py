@@ -82,16 +82,14 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_answer_always_retrieves_and_calls_model(self):
         deps = Deps(Mock(), embedding_client([1, 0]))
         agent = create_agent(
-            TestModel(call_tools=[], custom_output_args=model_answer("Ответ с источником"))
+            TestModel(call_tools=[], custom_output_args=model_answer("  Только ответ.  "))
         )
         service = ExamAgent(agent, deps, AsyncMock())
         with patch(
             "agent.retrieve_context", return_value="Материалы из book.pdf"
         ) as retrieve:
             answer = await service.answer("  Вопрос?  ")
-        self.assertEqual(
-            answer, "Ответ с источником\n\nУверенность: высокая — Материалы подтверждают ответ."
-        )
+        self.assertEqual(answer, "Только ответ.")
         retrieve.assert_called_once_with(deps, "Вопрос?")
 
     async def test_agent_can_call_additional_retrieve_tool(self):
@@ -101,7 +99,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         )
         service = ExamAgent(agent, deps, AsyncMock())
         with patch("agent.retrieve_context", return_value="Материалы") as retrieve:
-            self.assertIn("Уверенность: высокая", await service.answer("Вопрос?"))
+            self.assertEqual(await service.answer("Вопрос?"), "Ответ")
         self.assertEqual(retrieve.call_count, 2)
         self.assertEqual(retrieve.call_args_list[0].args, (deps, "Вопрос?"))
 
@@ -117,7 +115,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         deps = Deps(Mock(), embedding_client([1, 0]))
         service = ExamAgent(create_agent(FunctionModel(respond)), deps, AsyncMock())
         with patch("agent.retrieve_context", return_value="Текст из book.pdf"):
-            self.assertIn("Уверенность: высокая", await service.answer("Тестовый вопрос"))
+            self.assertEqual(await service.answer("Тестовый вопрос"), "Ответ")
         self.assertIn("Тестовый вопрос", str(received))
         self.assertIn("Текст из book.pdf", str(received))
 
@@ -125,11 +123,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         model = Mock()
         service = ExamAgent(model, Deps(Mock(), embedding_client([1, 0])), AsyncMock())
         with patch("agent.retrieve_context", return_value=NO_CONTEXT):
-            self.assertEqual(
-                await service.answer("вопрос"),
-                f"{NO_CONTEXT}\n\nУверенность: низкая — материалы не найдены.",
-            )
-            self.assertEqual(await service.answer("вопрос", compact=True), NO_CONTEXT)
+            self.assertEqual(await service.answer("вопрос"), NO_CONTEXT)
         model.run.assert_not_called()
         with self.assertRaisesRegex(ValueError, "пустым"):
             await service.answer("  ")
@@ -169,7 +163,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             env = {"OPENROUTER_API_KEY": "test", "CHROMA_DB_PATH": directory}
             with patch.dict("os.environ", env, clear=True):
                 async with ExamAgent.from_env() as service:
-                    self.assertIn("Уверенность: низкая", await service.answer("вопрос"))
+                    self.assertEqual(await service.answer("вопрос"), NO_CONTEXT)
             with patch.dict(
                 "os.environ", {**env, "CHROMA_COLLECTION": "missing"}, clear=True
             ):
@@ -178,7 +172,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     ExamAgent.from_env()
 
-    async def test_confidence_levels_and_explanations_are_displayed(self):
+    async def test_confidence_levels_and_explanations_are_not_displayed(self):
         for level in ("высокая", "средняя", "низкая"):
             with self.subTest(level=level):
                 agent = create_agent(
@@ -191,11 +185,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                 )
                 service = ExamAgent(agent, Deps(Mock(), embedding_client([1, 0])), AsyncMock())
                 with patch("agent.retrieve_context", return_value="Материалы"):
-                    answer = await service.answer("Вопрос?")
-                    compact = await service.answer("Вопрос?", compact=True)
-                self.assertIn(f"Уверенность: {level} — Объяснение оценки.", answer)
-                suffix = "" if level == "высокая" else f"\n\nУверенность: {level}"
-                self.assertEqual(compact, f"Ответ{suffix}")
+                    self.assertEqual(await service.answer("Вопрос?"), "Ответ")
 
     def test_confidence_is_validated(self):
         with self.assertRaises(ValidationError):

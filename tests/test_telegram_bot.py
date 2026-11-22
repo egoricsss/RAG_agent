@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 from telegram import MessageEntity
 
@@ -115,7 +115,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         update = make_update(text="Текст вопроса")
         self.bot.service.answer.return_value = "X" * 5000
         await self.bot.text(update, self.context)
-        self.bot.service.answer.assert_awaited_once_with("Текст вопроса", compact=True)
+        self.bot.service.answer.assert_awaited_once_with("Текст вопроса")
         self.assertEqual(update.effective_message.reply_text.await_count, 2)
 
     async def test_markdown_answer_sent_with_telegram_entities(self):
@@ -126,17 +126,23 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             "Б. id_1", entities=[MessageEntity("bold", 0, 2), MessageEntity("code", 3, 4)]
         )
 
-    async def test_single_photo_questions_passed_individually(self):
+    async def test_single_photo_sends_only_answers_in_order(self):
         photo = SimpleNamespace(file_id="id", file_size=5)
         update = make_update(photos=[photo], caption="Объясни")
         file = SimpleNamespace(download_as_bytearray=AsyncMock(return_value=bytearray(b"image")))
         self.context.bot.get_file.return_value = file
+        self.bot.service.answer.side_effect = ["Первый ответ", "Второй ответ"]
         with patch("telegram_bot.extract_questions", new=AsyncMock(return_value=["Вопрос 1", "Вопрос 2"])) as ocr:
             await self.bot.photo(update, self.context)
         ocr.assert_awaited_once_with(self.bot.service, "vision", [b"image"])
-        self.assertEqual(self.bot.service.answer.await_count, 2)
-        self.bot.service.answer.assert_any_await("Вопрос 1\n\nКомментарий пользователя: Объясни", compact=True)
-        self.assertEqual(update.effective_message.reply_text.await_count, 4)
+        self.assertEqual(self.bot.service.answer.await_args_list, [
+            call("Вопрос 1\n\nКомментарий пользователя: Объясни"),
+            call("Вопрос 2\n\nКомментарий пользователя: Объясни"),
+        ])
+        self.assertEqual(update.effective_message.reply_text.await_args_list, [
+            call("Первый ответ", entities=[]),
+            call("Второй ответ", entities=[]),
+        ])
 
     async def test_album_batched_sorted_and_isolated(self):
         photo1 = SimpleNamespace(file_id="1", file_size=1)
@@ -155,7 +161,9 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.photo(second, self.context)
             await asyncio.gather(*self.bot.tasks, return_exceptions=True)
         ocr.assert_awaited_once_with(self.bot.service, "vision", [b"1", b"2"])
-        self.bot.service.answer.assert_awaited_once_with("Question", compact=True)
+        self.bot.service.answer.assert_awaited_once_with("Question")
+        first.effective_message.reply_text.assert_awaited_once_with("Ответ", entities=[])
+        second.effective_message.reply_text.assert_not_awaited()
         self.assertFalse(self.bot.albums)
 
     async def test_empty_and_oversized_photo(self):
@@ -273,7 +281,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
     async def test_revocation_while_answer_is_running_suppresses_reply(self):
         started, finish = asyncio.Event(), asyncio.Event()
 
-        async def answer(_, *, compact):
+        async def answer(_):
             started.set()
             await finish.wait()
             return "Ответ"
