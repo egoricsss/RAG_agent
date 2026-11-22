@@ -8,8 +8,9 @@ import logging
 import os
 from dataclasses import dataclass, field
 
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field
-from telegram import Update
+from telegram import MessageEntity, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -27,6 +28,7 @@ MAX_PHOTOS = 10  # Telegram albums contain at most 10 items.
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4096
 MAX_USER_ID = 2**63 - 1
+ANSWER_MARKDOWN = MarkdownIt("commonmark", {"html": False})
 
 
 def valid_user_id(value: str) -> bool:
@@ -141,6 +143,83 @@ def split_message(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> list[str]:
     return chunks
 
 
+def format_answer(markdown: str) -> list[tuple[str, list[MessageEntity]]]:
+    """Convert basic Markdown to text and entities before applying the Telegram limit."""
+    pieces: list[str] = []
+    spans: list[tuple[int, int, str]] = []
+    size = 0
+    lists: list[int | None] = []
+    heading = False
+
+    def append(text: str, *styles: str) -> None:
+        nonlocal size
+        pieces.append(text)
+        if text.strip():
+            spans.extend((size, size + len(text), style) for style in styles)
+        size += len(text)
+
+    for token in ANSWER_MARKDOWN.parse(markdown):
+        match token.type:
+            case "bullet_list_open":
+                lists.append(None)
+            case "ordered_list_open":
+                lists.append(int(token.attrGet("start") or 1))
+            case "bullet_list_close" | "ordered_list_close":
+                lists.pop()
+                if not lists:
+                    append("\n")
+            case "list_item_open":
+                number = lists[-1]
+                marker = "• " if number is None else f"{number}. "
+                append("  " * (len(lists) - 1) + marker)
+                if number is not None:
+                    lists[-1] = number + 1
+            case "heading_open":
+                heading = True
+            case "heading_close":
+                heading = False
+                append("\n\n")
+            case "paragraph_close":
+                append("\n" if token.hidden else "\n\n")
+            case "fence" | "code_block":
+                append(token.content.rstrip("\n"), MessageEntity.PRE)
+                append("\n\n")
+            case "hr":
+                append("—\n\n")
+            case "inline":
+                styles = [MessageEntity.BOLD] if heading else []
+                for child in token.children or []:
+                    match child.type:
+                        case "strong_open":
+                            styles.append(MessageEntity.BOLD)
+                        case "em_open":
+                            styles.append(MessageEntity.ITALIC)
+                        case "strong_close" | "em_close":
+                            styles.pop()
+                        case "code_inline":
+                            # Telegram forbids overlapping code and emphasis entities.
+                            append(child.content, MessageEntity.CODE)
+                        case "softbreak" | "hardbreak":
+                            append("\n")
+                        case "text" | "image":
+                            append(child.content, *dict.fromkeys(styles))
+
+    text = "".join(pieces).rstrip("\n") or markdown
+    messages = []
+    offset = 0
+    for part in split_message(text):
+        end = offset + len(part)
+        if part.strip():
+            entities = []
+            for start, stop, style in spans:
+                left, right = max(start, offset), min(stop, end)
+                if left < right and text[left:right].strip():
+                    entities.append(MessageEntity(style, left - offset, right - left))
+            messages.append((part, MessageEntity.adjust_message_entities_to_utf_16(part, entities)))
+        offset = end
+    return messages
+
+
 @dataclass
 class Album:
     messages: list = field(default_factory=list)
@@ -244,11 +323,11 @@ class PrivateBot:
         if not self.still_authorized(message):
             return
         assert self.service is not None
-        answer = await self.service.answer(question)
-        for part in split_message(answer):
+        answer = await self.service.answer(question, compact=True)
+        for part, entities in format_answer(answer):
             if not self.still_authorized(message):
                 return
-            await message.reply_text(part)
+            await message.reply_text(part, entities=entities)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self.authorized(update):

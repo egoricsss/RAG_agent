@@ -129,6 +129,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                 await service.answer("вопрос"),
                 f"{NO_CONTEXT}\n\nУверенность: низкая — материалы не найдены.",
             )
+            self.assertEqual(await service.answer("вопрос", compact=True), NO_CONTEXT)
         model.run.assert_not_called()
         with self.assertRaisesRegex(ValueError, "пустым"):
             await service.answer("  ")
@@ -191,7 +192,10 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
                 service = ExamAgent(agent, Deps(Mock(), embedding_client([1, 0])), AsyncMock())
                 with patch("agent.retrieve_context", return_value="Материалы"):
                     answer = await service.answer("Вопрос?")
+                    compact = await service.answer("Вопрос?", compact=True)
                 self.assertIn(f"Уверенность: {level} — Объяснение оценки.", answer)
+                suffix = "" if level == "высокая" else f"\n\nУверенность: {level}"
+                self.assertEqual(compact, f"Ответ{suffix}")
 
     def test_confidence_is_validated(self):
         with self.assertRaises(ValidationError):

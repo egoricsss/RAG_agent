@@ -11,6 +11,7 @@ ChromaDB и закрытый Telegram-бот.
 | [docs/telegram-bot.md](docs/telegram-bot.md) | правки `telegram_bot.py`, `access_store.py`: доступ, хендлеры, фото |
 | [docs/deploy.md](docs/deploy.md) | `Dockerfile`, `docker-compose.yml`, `.env`, запуск и обновление на сервере |
 | [docs/knowledge-base.md](docs/knowledge-base.md) | ChromaDB, чанкинг, `utils/pdf_embeding_converter.py` |
+| [docs/golden-set.md](docs/golden-set.md) | проверка качества ответов: эталоны, ключевые факты, тесты, краевые случаи |
 | [README.md](README.md) | пользовательский запуск и поведение для людей |
 
 Начинай с этого файла, подробности бери в нужном документе. Не дублируй сюда
@@ -28,6 +29,8 @@ Python 3.14, uv, pydantic-ai + OpenRouter, ChromaDB (cosine), python-telegram-bo
 | `uv run telegram_bot.py` | Telegram-бот (long polling) |
 | `uv run python -m unittest discover -s tests -v` | тесты |
 | `uv run ruff check .` | линт |
+| `./deploy.sh --check` | собрать образ и проверить его безопасность локально |
+| `./deploy.sh` | деплой на сервере с резервной копией и откатом |
 
 ## Правила
 

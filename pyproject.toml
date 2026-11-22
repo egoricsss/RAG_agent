@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "chromadb==1.5.9",
+    "markdown-it-py>=4,<5",
     "openai>=3.51.0",
     "pydantic-ai>=2.68.0",
     "pypdf>=7.1.0",

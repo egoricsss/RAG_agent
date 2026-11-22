@@ -4,9 +4,17 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
-from telegram_bot import BotConfig, PrivateBot, extract_questions, split_message
+from telegram import MessageEntity
+
+from telegram_bot import (
+    BotConfig,
+    PrivateBot,
+    extract_questions,
+    format_answer,
+    split_message,
+)
 
 
 def make_update(user_id=12, chat_type="private", text="Вопрос", photos=None,
@@ -61,6 +69,31 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(all(0 < len(chunk.encode("utf-16-le")) // 2 <= 4096 for chunk in chunks))
 
 
+class FormattingTests(unittest.TestCase):
+    def test_emphasis_code_lists_and_literal_html(self):
+        (text, entities), = format_answer(
+            "😀 **Б. `id_1`**\n\n- *Курсив*\n- <b>A & B</b>\n\n```\nx < y\n```"
+        )
+        self.assertEqual(text, "😀 Б. id_1\n\n• Курсив\n• <b>A & B</b>\n\nx < y")
+        encoded = text.encode("utf-16-le")
+        self.assertEqual(
+            [(e.type, encoded[e.offset * 2:(e.offset + e.length) * 2].decode("utf-16-le"))
+             for e in entities],
+            [("bold", "Б. "), ("code", "id_1"), ("italic", "Курсив"), ("pre", "x < y")],
+        )
+
+    def test_formatted_span_survives_message_split(self):
+        parts = format_answer(f"**{'😀' * 2049}**")
+        self.assertEqual([text for text, _ in parts], ["😀" * 2048, "😀"])
+        self.assertEqual([[(e.type, e.offset, e.length) for e in entities] for _, entities in parts], [
+            [("bold", 0, 4096)],
+            [("bold", 0, 2)],
+        ])
+
+    def test_unclosed_markdown_can_still_be_sent(self):
+        self.assertEqual(format_answer("**без закрытия и `код"), [("**без закрытия и `код", [])])
+
+
 class BotTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.bot = PrivateBot(BotConfig("token", frozenset({12}), "vision", 42, ":memory:"))
@@ -82,8 +115,16 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         update = make_update(text="Текст вопроса")
         self.bot.service.answer.return_value = "X" * 5000
         await self.bot.text(update, self.context)
-        self.bot.service.answer.assert_awaited_once_with("Текст вопроса")
+        self.bot.service.answer.assert_awaited_once_with("Текст вопроса", compact=True)
         self.assertEqual(update.effective_message.reply_text.await_count, 2)
+
+    async def test_markdown_answer_sent_with_telegram_entities(self):
+        update = make_update()
+        self.bot.service.answer.return_value = "**Б.** `id_1`"
+        await self.bot.text(update, self.context)
+        update.effective_message.reply_text.assert_awaited_once_with(
+            "Б. id_1", entities=[MessageEntity("bold", 0, 2), MessageEntity("code", 3, 4)]
+        )
 
     async def test_single_photo_questions_passed_individually(self):
         photo = SimpleNamespace(file_id="id", file_size=5)
@@ -94,7 +135,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.photo(update, self.context)
         ocr.assert_awaited_once_with(self.bot.service, "vision", [b"image"])
         self.assertEqual(self.bot.service.answer.await_count, 2)
-        self.bot.service.answer.assert_any_await("Вопрос 1\n\nКомментарий пользователя: Объясни")
+        self.bot.service.answer.assert_any_await("Вопрос 1\n\nКомментарий пользователя: Объясни", compact=True)
         self.assertEqual(update.effective_message.reply_text.await_count, 4)
 
     async def test_album_batched_sorted_and_isolated(self):
@@ -114,7 +155,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             await self.bot.photo(second, self.context)
             await asyncio.gather(*self.bot.tasks, return_exceptions=True)
         ocr.assert_awaited_once_with(self.bot.service, "vision", [b"1", b"2"])
-        self.bot.service.answer.assert_awaited_once_with("Question")
+        self.bot.service.answer.assert_awaited_once_with("Question", compact=True)
         self.assertFalse(self.bot.albums)
 
     async def test_empty_and_oversized_photo(self):
@@ -232,7 +273,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
     async def test_revocation_while_answer_is_running_suppresses_reply(self):
         started, finish = asyncio.Event(), asyncio.Event()
 
-        async def answer(_):
+        async def answer(_, *, compact):
             started.set()
             await finish.wait()
             return "Ответ"

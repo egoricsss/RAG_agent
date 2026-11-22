@@ -24,12 +24,17 @@ DEFAULT_CHAT_MODEL = "google/gemini-2.5-flash"
 NO_CONTEXT = "В базе знаний не найдено материалов для ответа на этот вопрос."
 
 INSTRUCTIONS = """Ты — помощник по подготовке к зачёту по курсу «Транслирующие системы».
-Отвечай по-русски, структурированно и по делу, используя только найденные материалы.
+Отвечай по-русски, используя только найденные материалы. Начинай сразу с ответа,
+не повторяй вопрос и не добавляй вступление, вывод или примеры без необходимости.
+Обычно достаточно 1–3 коротких предложений. Если нужно перечисление, дай короткий список.
+В тесте первой строкой укажи букву или номер и текст выбранного варианта (или вариантов).
+Поясняй выбор только если это явно требуется или если материалы не дают однозначного ответа.
+При необходимости используй простой Markdown: **жирный**, *курсив*, `код`, списки.
 Начальные материалы уже приложены к вопросу. При необходимости вызови retrieve для
 дополнительного поиска. Готовые ответы типа qa предпочитай, когда они релевантны;
 учебные материалы используй для дополнения и уточнения. Если материалов недостаточно,
 честно скажи об этом, не выдумывай факты и не ссылайся на отсутствующие источники.
-Укажи использованные имена файлов и, если есть, номера вопросов или страниц.
+Использованные имена файлов и номера вопросов или страниц укажи одной короткой строкой.
 Оцени уверенность в ответе по полноте, релевантности и согласованности найденных
 материалов: высокая — материалы прямо и достаточно полно подтверждают ответ;
 средняя — подтверждают ответ лишь частично или есть небольшая неоднозначность;
@@ -170,19 +175,26 @@ class ExamAgent:
             chat_client,
         )
 
-    async def answer(self, question: str) -> str:
+    async def answer(self, question: str, *, compact: bool = False) -> str:
         question = question.strip()
         if not question:
             raise ValueError("Вопрос не должен быть пустым.")
         # The synchronous Chroma/OpenAI clients must not block a future bot's event loop.
         context = await asyncio.to_thread(retrieve_context, self.deps, question)
         if context == NO_CONTEXT:
+            if compact:
+                return NO_CONTEXT
             return f"{NO_CONTEXT}\n\nУверенность: низкая — материалы не найдены."
         prompt = json.dumps(
             {"question": question, "course_materials": context}, ensure_ascii=False
         )
         result = await self.agent.run(prompt, deps=self.deps)
         answer = result.output
+        if compact:
+            text = answer.answer.strip()
+            if answer.confidence != "высокая":
+                text += f"\n\nУверенность: {answer.confidence}"
+            return text
         return (
             f"{answer.answer}\n\n"
             f"Уверенность: {answer.confidence} — {answer.confidence_reason}"
